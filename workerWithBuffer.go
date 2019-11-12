@@ -40,6 +40,7 @@ func (w *WorkerWithBuffer) dispatch() error {
 			w.worker()
 
 			log.Println("worker close signal")
+			close(w.msg)
 			return nil
 		default:
 			w.worker()
