@@ -70,7 +70,7 @@ func (w *Worker) execute(fwg *sync.WaitGroup, poss int) error {
 	for {
 		select {
 		case <-w.signal:
-			log.Println("close signal")
+			log.Println("close signal, worker =>", poss)
 			return nil
 		default:
 			if msg := w.message(poss); msg.isProcess == false && msg.payload != "" {
