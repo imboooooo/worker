@@ -17,12 +17,21 @@ func main() {
 	// Handle SIGINT and SIGTERM.
 	ch := make(chan os.Signal)
 
-	var worker = worker.NewWorkerWithBuffer(10, func(payload string) error {
-		time.Sleep(1* time.Minute)
-		fmt.Println(payload)
+	var worker = worker.NewWorkerWithBuffer(1000, func(payload string) error {
+		//time.Sleep(1 * time.Second)
+		f, _ := os.Create(fmt.Sprint("./temp/file_", payload))
+		defer f.Close()
 		return nil
 	})
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			worker.SendJob(fmt.Sprint("", i))
+		}
+	}()
+	time.Sleep(time.Second * 1)
 
 	wg.Add(1)
 	go func() {
@@ -37,15 +46,6 @@ func main() {
 		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 		log.Println(<-ch)
 		worker.Stop()
-	}()
-
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 10; i++ {
-			worker.SendJob(fmt.Sprintf(" msg :%d", i))
-		}
 	}()
 
 	wg.Wait()

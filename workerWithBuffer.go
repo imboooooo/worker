@@ -1,12 +1,11 @@
 package worker
 
 import (
+	"fmt"
 	"log"
 	"sync"
 	"time"
 )
-
-
 
 // NewWorkerWithBuffer this for new worker
 func NewWorkerWithBuffer(numberWorker int, fn func(string) error) *WorkerWithBuffer {
@@ -15,7 +14,12 @@ func NewWorkerWithBuffer(numberWorker int, fn func(string) error) *WorkerWithBuf
 	)
 	worker.signal = make(chan struct{})
 	worker.fn = fn
-	worker.msg = make(chan string,numberWorker)
+	worker.poolMSG = make(chan string, numberWorker)
+	worker.msg = []chan string{
+		make(chan string, int(numberWorker/3)),
+		make(chan string, int(numberWorker/3)),
+		make(chan string, int(numberWorker/3)+int(numberWorker%3)),
+	}
 
 	return worker
 
@@ -23,46 +27,61 @@ func NewWorkerWithBuffer(numberWorker int, fn func(string) error) *WorkerWithBuf
 
 // WorkerWithBuffer this struct for worker
 type WorkerWithBuffer struct {
-	signal    chan struct{}
-	msg    chan string
-	muMSG  sync.Mutex
-	fn     func(string) error
+	msg     []chan string
+	signal  chan struct{}
+	poolMSG chan string
+	muMSG   sync.Mutex
+	fn      func(string) error
 }
-
 
 // dispatch this function we used for dispatch message
 func (w *WorkerWithBuffer) dispatch() error {
-	var err error
+	n := 0
 	for {
 		select {
+		case msg := <-w.poolMSG:
+			w.msg[n] <- msg
+			if n >= 2 {
+				n = 0
+			} else {
+				n++
+			}
 		case <-w.signal:
-			// clear message
-			w.worker()
-
-			log.Println("worker close signal")
-			close(w.msg)
 			return nil
-		default:
-			w.worker()
 		}
-		time.Sleep(1 * time.Second)
-
 	}
-	return err
+	return nil
 }
 
 // worker this function we used for worker
-func (w *WorkerWithBuffer) worker()  {
-	wg:=sync.WaitGroup{}
-	n:=len(w.msg)
-	for i:=1;i<=n;i++ {
-		wg.Add(1)
-		go func(payload string,fWG *sync.WaitGroup) {
-			defer fWG.Done()
-			w.fn(payload)
-		}(<-w.msg,&wg)
+func (w *WorkerWithBuffer) worker(msg chan string) {
+	for {
+		select {
+		case payload := <-msg:
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						fmt.Println("Recovered in f", r)
+					}
+				}()
+				w.fn(payload)
+			}()
+		case <-w.signal:
+			for i := len(msg); i > 0; i++ {
+				go func(payload string) {
+					defer func() {
+						if r := recover(); r != nil {
+							fmt.Println("Recovered in f", r)
+						}
+					}()
+
+					w.fn(payload)
+				}(<-msg)
+			}
+			log.Println("worker close signal")
+			return
+		}
 	}
-	wg.Wait()
 }
 
 //SendJob this for send job
@@ -73,11 +92,10 @@ func (w *WorkerWithBuffer) SendJob(payload string) {
 		case <-w.signal:
 			return
 		default:
-			if len(w.msg)< cap(w.msg) {
-				w.msg<-payload
+			if len(w.poolMSG) < cap(w.poolMSG) {
+				w.poolMSG <- payload
 				return
 			}
-
 		}
 
 		time.Sleep(1 * time.Second)
@@ -86,7 +104,25 @@ func (w *WorkerWithBuffer) SendJob(payload string) {
 
 // Start this for wait process
 func (w *WorkerWithBuffer) Start() {
-	w.dispatch()
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	go func(fwg *sync.WaitGroup) {
+		defer fwg.Done()
+		w.dispatch()
+	}(wg)
+
+	for n := 0; n < cap(w.msg); n++ {
+		wg.Add(1)
+		go func(fwg *sync.WaitGroup, msgIndex int) {
+			defer fwg.Done()
+			w.worker(w.msg[msgIndex])
+		}(wg, n)
+	}
+	wg.Wait()
+	for n := 0; n < cap(w.msg); n++ {
+		close(w.msg[n])
+	}
+
 }
 
 // Stop this for stop process

@@ -17,7 +17,7 @@ func main() {
 	ch := make(chan os.Signal)
 
 	var worker = worker.NewWorker(100, func(payload string) error {
-		fmt.Println(payload)
+		fmt.Println("execute ", payload)
 		return nil
 	})
 
@@ -28,7 +28,6 @@ func main() {
 			worker.SendJob(fmt.Sprintf(" msg :%d", i))
 		}
 	}()
-
 
 	wg.Add(1)
 	go func() {
