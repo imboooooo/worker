@@ -19,10 +19,10 @@ const (
 
 // ConfigWorkerWithBuffer this for worker with buffer
 type ConfigWorkerWithBuffer struct {
-	MessageSize int                // this for message buffer
-	Worker      int                // this for number of worker
-	FN          func(string) error // while process message
-	Timeout     time.Duration      // this for set timeout execution
+	MessageSize int                                 // this for message buffer
+	Worker      int                                 // this for number of worker
+	FN          func(context.Context, string) error // while process message
+	Timeout     time.Duration                       // this for set timeout execution
 }
 
 // NewWorkerWithBuffer this for new worker
@@ -32,7 +32,7 @@ func NewWorkerWithBuffer(cfg ConfigWorkerWithBuffer) *WorkerWithBuffer {
 	)
 	worker.signal = make(chan struct{})
 
-	worker.poolMSG = make(chan string, cfg.MessageSize)
+	worker.poolMSG = make(chan QueueMessage, cfg.MessageSize)
 
 	// split message to each worker
 	if cfg.Worker == 0 {
@@ -46,18 +46,18 @@ func NewWorkerWithBuffer(cfg ConfigWorkerWithBuffer) *WorkerWithBuffer {
 	worker.timeout = cfg.Timeout
 
 	// set timeout
-	worker.fn = func(s string) error {
-		ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	worker.fn = func(ctx context.Context, msg string) error {
+		ctxTimeout, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 		chErr := make(chan error)
 
-		go func(ctx context.Context) {
+		go func(ctxTimeout context.Context) {
 			defer cancel()
-			chErr <- cfg.FN(s)
-		}(ctx)
+			chErr <- cfg.FN(ctx, msg)
+		}(ctxTimeout)
 
 		select {
-		case <-ctx.Done():
-			switch ctx.Err() {
+		case <-ctxTimeout.Done():
+			switch ctxTimeout.Err() {
 			case context.DeadlineExceeded:
 				return errors.New(ErrorTimeoutProcess)
 			case context.Canceled:
@@ -70,32 +70,38 @@ func NewWorkerWithBuffer(cfg ConfigWorkerWithBuffer) *WorkerWithBuffer {
 		return nil
 	}
 
-	worker.msg = []chan string{}
+	worker.msg = []chan QueueMessage{}
 	for i := 0; i < cfg.Worker; i++ {
 		if i == (cfg.Worker - 1) {
-			worker.msg = append(worker.msg, make(chan string, int(cfg.MessageSize/cfg.Worker)+int(cfg.MessageSize%cfg.Worker)))
+			worker.msg = append(worker.msg, make(chan QueueMessage, int(cfg.MessageSize/cfg.Worker)+int(cfg.MessageSize%cfg.Worker)))
 			continue
 		}
-		worker.msg = append(worker.msg, make(chan string, int(cfg.MessageSize/cfg.Worker)))
+		worker.msg = append(worker.msg, make(chan QueueMessage, int(cfg.MessageSize/cfg.Worker)))
 	}
 
 	return worker
 
 }
 
+//QueueMessage this for queue message
+type QueueMessage struct {
+	ctx context.Context
+	msg string
+}
+
 // WorkerWithBuffer this struct for worker
 type WorkerWithBuffer struct {
-	msg         []chan string
+	msg         []chan QueueMessage
+	poolMSG     chan QueueMessage
+	tempMessage []QueueMessage
 	signal      chan struct{}
-	poolMSG     chan string
-	tempMessage []string
 	muMSG       sync.Mutex
 	timeout     time.Duration
-	fn          func(string) error
+	fn          func(context.Context, string) error
 }
 
 // addMessageToWorker this for add message to worker
-func (w *WorkerWithBuffer) addMessageToWorker(msg string, pos int) int {
+func (w *WorkerWithBuffer) addMessageToWorker(msg QueueMessage, pos int) int {
 	n := pos
 	for {
 		select {
@@ -133,13 +139,13 @@ func (w *WorkerWithBuffer) dispatch() error {
 }
 
 // worker this function we used for worker
-func (w *WorkerWithBuffer) worker(workerNumber int, msg chan string) {
+func (w *WorkerWithBuffer) worker(workerNumber int, msg chan QueueMessage) {
 	for {
 		select {
 		case payload := <-msg:
 			func() {
 				defer w.recover(fmt.Sprint("worker ", workerNumber))
-				w.fn(payload)
+				w.fn(payload.ctx, payload.msg)
 			}()
 		case <-w.signal:
 			log.Printf("close worker %d \n", workerNumber)
@@ -157,7 +163,10 @@ func (w *WorkerWithBuffer) SendJob(ctx context.Context, payload string) error {
 			return errors.New(ErrorWorkerAlreadClosed)
 		default:
 			if len(w.poolMSG) < cap(w.poolMSG) {
-				w.poolMSG <- payload
+				w.poolMSG <- QueueMessage{
+					ctx: ctx,
+					msg: payload,
+				}
 				return nil
 			}
 		}
@@ -174,36 +183,36 @@ func (w *WorkerWithBuffer) cleanUpMessage() {
 	/// clea from  pool message
 	for i := len(w.poolMSG); i > 0; i-- {
 		wg.Add(1)
-		go func(fWG *sync.WaitGroup, payload string) {
+		go func(fWG *sync.WaitGroup, payload QueueMessage) {
 			defer func() {
 				fWG.Done()
 				w.recover(fmt.Sprint("clean up pool message"))
 			}()
 
-			w.fn(payload)
+			w.fn(payload.ctx, payload.msg)
 		}(wg, <-w.poolMSG)
 	}
 
 	for n := 0; n < len(w.msg); n++ {
 		for i := len(w.msg[n]); i > 0; i-- {
 			wg.Add(1)
-			go func(fWG *sync.WaitGroup, payload string) {
+			go func(fWG *sync.WaitGroup, payload QueueMessage) {
 				defer func() {
 					fWG.Done()
 					w.recover(fmt.Sprintf("clean up message pool "))
 				}()
-				w.fn(payload)
+				w.fn(payload.ctx, payload.msg)
 			}(wg, <-w.msg[n])
 		}
 	}
 	for _, temp := range w.tempMessage {
 		wg.Add(1)
-		go func(fWG *sync.WaitGroup, payload string) {
+		go func(fWG *sync.WaitGroup, payload QueueMessage) {
 			defer func() {
 				fWG.Done()
 				w.recover(fmt.Sprintf("clean up message pool "))
 			}()
-			w.fn(payload)
+			w.fn(payload.ctx, payload.msg)
 		}(wg, temp)
 	}
 	wg.Wait()

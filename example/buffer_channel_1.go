@@ -19,9 +19,9 @@ func main() {
 	ch := make(chan os.Signal)
 
 	var worker = worker.NewWorkerWithBuffer(worker.ConfigWorkerWithBuffer{
-		MessageSize: 2,
-		Worker:      2,
-		FN: func(payload string) error {
+		MessageSize: 100,
+		Worker:      100,
+		FN: func(ctx context.Context, payload string) error {
 			fmt.Println("process message ", payload)
 			time.Sleep(12 * time.Second)
 			f, _ := os.Create(fmt.Sprint("./temp/file_", payload))
