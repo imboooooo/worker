@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+const (
+	//ErrorWorkerAlreadClosed this for error log for worker already close
+	ErrorWorkerAlreadClosed = "worker already closed"
+	// ErrorTimeoutProcess this for error timeout
+	ErrorTimeoutProcess = "process timeout exceeded"
+)
+
 // ConfigWorkerWithBuffer this for worker with buffer
 type ConfigWorkerWithBuffer struct {
 	MessageSize int                // this for message buffer
@@ -40,20 +47,19 @@ func NewWorkerWithBuffer(cfg ConfigWorkerWithBuffer) *WorkerWithBuffer {
 
 	// set timeout
 	worker.fn = func(s string) error {
-		ctx, cancel := context.WithTimeout(
-			context.Background(),
-			time.Duration(cfg.Timeout))
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 		chErr := make(chan error)
+
 		go func(ctx context.Context) {
 			defer cancel()
 			chErr <- cfg.FN(s)
 		}(ctx)
+
 		select {
 		case <-ctx.Done():
 			switch ctx.Err() {
 			case context.DeadlineExceeded:
-				fmt.Println("process timeout exceeded")
-				return errors.New("context timeout exceeded")
+				return errors.New(ErrorTimeoutProcess)
 			case context.Canceled:
 				// context cancelled by force. whole process is complete
 				return nil
@@ -79,12 +85,36 @@ func NewWorkerWithBuffer(cfg ConfigWorkerWithBuffer) *WorkerWithBuffer {
 
 // WorkerWithBuffer this struct for worker
 type WorkerWithBuffer struct {
-	msg     []chan string
-	signal  chan struct{}
-	poolMSG chan string
-	muMSG   sync.Mutex
-	timeout time.Duration
-	fn      func(string) error
+	msg         []chan string
+	signal      chan struct{}
+	poolMSG     chan string
+	tempMessage []string
+	muMSG       sync.Mutex
+	timeout     time.Duration
+	fn          func(string) error
+}
+
+// addMessageToWorker this for add message to worker
+func (w *WorkerWithBuffer) addMessageToWorker(msg string, pos int) int {
+	n := pos
+	for {
+		select {
+		case <-w.signal:
+			w.tempMessage = append(w.tempMessage, msg)
+			return n
+		default:
+			if n > len(w.msg)-1 {
+				n = 0
+			}
+			if cap(w.msg[n]) <= len(w.msg[n]) {
+				n++
+			} else {
+				w.msg[n] <- msg
+				n++
+				return n
+			}
+		}
+	}
 }
 
 // dispatch this function we used for dispatch message
@@ -92,15 +122,11 @@ func (w *WorkerWithBuffer) dispatch() error {
 	n := 0
 	for {
 		select {
-		case msg := <-w.poolMSG:
-			w.msg[n] <- msg
-			if n >= len(w.msg)-1 {
-				n = 0
-			} else {
-				n++
-			}
 		case <-w.signal:
 			return nil
+		case msg := <-w.poolMSG:
+			n = w.addMessageToWorker(msg, n)
+
 		}
 	}
 	return nil
@@ -128,8 +154,7 @@ func (w *WorkerWithBuffer) SendJob(ctx context.Context, payload string) error {
 	for {
 		select {
 		case <-w.signal:
-			log.Print("close send job message")
-			return nil
+			return errors.New(ErrorWorkerAlreadClosed)
 		default:
 			if len(w.poolMSG) < cap(w.poolMSG) {
 				w.poolMSG <- payload
@@ -171,7 +196,16 @@ func (w *WorkerWithBuffer) cleanUpMessage() {
 			}(wg, <-w.msg[n])
 		}
 	}
-
+	for _, temp := range w.tempMessage {
+		wg.Add(1)
+		go func(fWG *sync.WaitGroup, payload string) {
+			defer func() {
+				fWG.Done()
+				w.recover(fmt.Sprintf("clean up message pool "))
+			}()
+			w.fn(payload)
+		}(wg, temp)
+	}
 	wg.Wait()
 }
 

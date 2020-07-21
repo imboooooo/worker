@@ -19,10 +19,11 @@ func main() {
 	ch := make(chan os.Signal)
 
 	var worker = worker.NewWorkerWithBuffer(worker.ConfigWorkerWithBuffer{
-		MessageSize: 50,
-		Worker:      50,
+		MessageSize: 2,
+		Worker:      2,
 		FN: func(payload string) error {
-			//time.Sleep(1 * time.Second)
+			fmt.Println("process message ", payload)
+			time.Sleep(12 * time.Second)
 			f, _ := os.Create(fmt.Sprint("./temp/file_", payload))
 			defer f.Close()
 			return nil
@@ -34,7 +35,10 @@ func main() {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 100; i++ {
-			worker.SendJob(context.Background(), fmt.Sprint("", i))
+			err := worker.SendJob(context.Background(), fmt.Sprint("", i))
+			if err == nil {
+				fmt.Println("success send message ", i)
+			}
 		}
 	}()
 	time.Sleep(time.Second * 1)
