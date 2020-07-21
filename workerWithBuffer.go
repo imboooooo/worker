@@ -126,7 +126,7 @@ func (w *WorkerWithBuffer) dispatch() error {
 }
 
 // worker this function we used for worker
-func (w *WorkerWithBuffer) worker(workerNumber int, msg chan workerMessage) {
+func (w *WorkerWithBuffer) worker(workerNumber int, msg chan workerMessage, closeSignal chan struct{}) {
 	for {
 		select {
 		case payload := <-msg:
@@ -134,7 +134,7 @@ func (w *WorkerWithBuffer) worker(workerNumber int, msg chan workerMessage) {
 				defer w.recover(fmt.Sprintf("worker %d ", workerNumber))
 				w.fn(payload.ctx, payload.msg)
 			}()
-		case <-w.signal:
+		case <-closeSignal:
 			log.Printf("close worker %d \n", workerNumber)
 			return
 		}
@@ -173,8 +173,11 @@ func (w *WorkerWithBuffer) cleanUpMessage() {
 	for i := len(w.poolMSG); i > 0; i-- {
 		wg.Add(1)
 		go func(fWG *sync.WaitGroup, payload workerMessage) {
-			defer fWG.Done()
-			defer w.recover(fmt.Sprint("clean up pool message"))
+			defer func() {
+				fWG.Done()
+				w.recover(fmt.Sprint("clean up pool message"))
+			}()
+
 			w.fn(payload.ctx, payload.msg)
 		}(wg, <-w.poolMSG)
 	}
@@ -183,8 +186,10 @@ func (w *WorkerWithBuffer) cleanUpMessage() {
 		for i := len(w.msg[n]); i > 0; i-- {
 			wg.Add(1)
 			go func(fWG *sync.WaitGroup, payload workerMessage) {
-				defer fWG.Done()
-				defer w.recover(fmt.Sprintf("clean up message pool "))
+				defer func() {
+					fWG.Done()
+					w.recover(fmt.Sprintf("clean up message pool "))
+				}()
 				w.fn(payload.ctx, payload.msg)
 			}(wg, <-w.msg[n])
 		}
@@ -206,7 +211,7 @@ func (w *WorkerWithBuffer) Start() {
 		wg.Add(1)
 		go func(fwg *sync.WaitGroup, msgIndex int) {
 			defer fwg.Done()
-			w.worker(msgIndex, w.msg[msgIndex])
+			w.worker(msgIndex, w.msg[msgIndex], w.signal)
 		}(wg, n)
 	}
 	wg.Wait()
