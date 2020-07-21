@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -17,18 +18,23 @@ func main() {
 	// Handle SIGINT and SIGTERM.
 	ch := make(chan os.Signal)
 
-	var worker = worker.NewWorkerWithBuffer(1000, func(payload string) error {
-		//time.Sleep(1 * time.Second)
-		f, _ := os.Create(fmt.Sprint("./temp/file_", payload))
-		defer f.Close()
-		return nil
-	})
+	var worker = worker.NewWorkerWithBuffer(worker.ConfigWorkerWithBuffer{
+		MessageSize: 50,
+		Worker:      50,
+		FN: func(payload string) error {
+			//time.Sleep(1 * time.Second)
+			f, _ := os.Create(fmt.Sprint("./temp/file_", payload))
+			defer f.Close()
+			return nil
+		},
+	},
+	)
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 100; i++ {
-			worker.SendJob(fmt.Sprint("", i))
+			worker.SendJob(context.Background(), fmt.Sprint("", i))
 		}
 	}()
 	time.Sleep(time.Second * 1)
