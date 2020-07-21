@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -18,10 +19,9 @@ func main() {
 	ch := make(chan os.Signal)
 
 	var worker = worker.NewWorkerWithBuffer(worker.ConfigWorkerWithBuffer{
-		MessageSize: 100,
-		Worker:      5,
-		FN: func(payload string) error {
-			//time.Sleep(1 * time.Second)
+		MessageSize: 3,
+		Worker:      3,
+		FN: func(ctx context.Context, payload string) error {
 			f, _ := os.Create(fmt.Sprint("./temp/file_", payload))
 			defer f.Close()
 			return nil
@@ -31,8 +31,11 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 100; i++ {
-			worker.SendJob(nil, fmt.Sprint(i))
+		for i := 0; i < 10; i++ {
+			err := worker.SendJob(context.Background(), fmt.Sprint(i))
+			if err == nil {
+				fmt.Println("message success send ", i)
+			}
 		}
 	}()
 	time.Sleep(time.Second * 1)
