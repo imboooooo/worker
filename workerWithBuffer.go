@@ -4,11 +4,29 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	log "github.com/sirupsen/logrus"
+	"os"
 	"runtime/debug"
 	"sync"
 	"time"
 )
+
+var doOnce sync.Once
+
+func init() {
+	doOnce.Do(func() {
+		// Log as JSON instead of the default ASCII formatter.
+		log.SetFormatter(&log.JSONFormatter{})
+
+		// Output to stdout instead of the default stderr
+		// Can be any io.Writer, see below for File example
+		log.SetOutput(os.Stdout)
+
+		// Only log the warning severity or above.
+		log.SetLevel(log.InfoLevel)
+	})
+
+}
 
 const (
 	//ErrorWorkerAlreadClosed this for error log for worker already close
@@ -148,7 +166,7 @@ func (w *WorkerWithBuffer) worker(workerNumber int, msg chan QueueMessage) {
 				w.fn(payload.ctx, payload.msg)
 			}()
 		case <-w.signal:
-			log.Printf("close worker %d \n", workerNumber)
+			log.Infof("close worker %d ", workerNumber)
 			return
 		}
 	}
@@ -177,8 +195,7 @@ func (w *WorkerWithBuffer) SendJob(ctx context.Context, payload string) error {
 // cleanUpMessage this function we used clean up message
 func (w *WorkerWithBuffer) cleanUpMessage() {
 
-	log.Printf("clean up message on worker")
-
+	log.Info("clean up message on worker")
 	wg := &sync.WaitGroup{}
 	/// clea from  pool message
 	for i := len(w.poolMSG); i > 0; i-- {
@@ -235,6 +252,7 @@ func (w *WorkerWithBuffer) Start() {
 		}(wg, n)
 	}
 	wg.Wait()
+	// this function we use for clean message
 	w.cleanUpMessage()
 	for n := 0; n < len(w.msg); n++ {
 		close(w.msg[n])
@@ -245,8 +263,7 @@ func (w *WorkerWithBuffer) Start() {
 // recover this for recover
 func (w *WorkerWithBuffer) recover(eventName string) {
 	if r := recover(); r != nil {
-		log.Printf("%s recovered err: %v stack_trace: %v \n", eventName, r, string(debug.Stack()))
-
+		log.Infof("%s recovered err: %v stack_trace: %v ", eventName, r, string(debug.Stack()))
 	}
 }
 

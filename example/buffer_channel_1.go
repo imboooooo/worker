@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	log "github.com/sirupsen/logrus"
 	"os"
 	"os/signal"
 	"sync"
@@ -22,7 +22,7 @@ func main() {
 		MessageSize: 100,
 		Worker:      100,
 		FN: func(ctx context.Context, payload string) error {
-			fmt.Println("process message ", payload)
+			log.Info("process message ", payload)
 			time.Sleep(12 * time.Second)
 			f, _ := os.Create(fmt.Sprint("./temp/file_", payload))
 			defer f.Close()
@@ -37,7 +37,7 @@ func main() {
 		for i := 0; i < 100; i++ {
 			err := worker.SendJob(context.Background(), fmt.Sprint("", i))
 			if err == nil {
-				fmt.Println("success send message ", i)
+				log.Info("success send message ", i)
 			}
 		}
 	}()
@@ -47,7 +47,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		worker.Start()
-		fmt.Println("close run worker")
+		log.Info("close run worker")
 	}()
 
 	wg.Add(1)
