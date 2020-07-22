@@ -2,3 +2,4 @@
 vendor
 example/temp/*
 .idea
+.idea/*

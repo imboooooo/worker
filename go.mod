@@ -1,4 +1,4 @@
-module zingerone/worker
+module github.com/zingerone/worker
 
 go 1.13
 
